@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+
+	<head>
+		<meta charset="utf-8">
+		<meta http-equiv="X-UA-Compatible" content="IE=edge">
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+		<title>Telegram bot @SecurePasswordManagerBot Helper</title>
+
+		<link href="https://stackpath.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet">
+		<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,400,600,700,300italic,400italic,600italic"
+		      rel="stylesheet">
+		<link href="https://stackpath.bootstrapcdn.com/bootstrap/4.4.1/css/bootstrap.min.css" rel="stylesheet">
+
+		<style>
+			body {
+				padding-bottom: 50px;
+			}
+
+			h1 {
+				border-bottom: 2px solid #ced4da;
+				margin-bottom: 20px;
+				padding-bottom: 10px;
+				margin-top: 50px;
+			}
+
+			h2 {
+				font-size: 24px;
+			}
+
+			h3 {
+				font-size: 18px;
+			}
+
+			pre {
+				padding: 9.5px;
+				line-height: 1.42857143;
+				word-break: break-all;
+				word-wrap: break-word;
+				background-color: #f5f5f5;
+				border: 1px solid #ced4da;
+				border-radius: 4px;
+			}
+
+			section {
+				margin-bottom: 50px;
+			}
+		</style>
+	</head>
+
+	<body>
+		<div class="container" id="app">
+			<h1>About</h1>
+			<p>This webpage is a helper for telegram bot <a target="_blank" href="https://t.me/SecurePasswordManagerBot">@SecurePasswordManagerBot</a></p>
+			<p>Here you could encrypt your passwords with master password, or decrypt them.</p>
+			<p>Firstly, you need to enter your master password and email. After that you could use the page.</p>
+
+			<h1>Key Derivation</h1>
+
+			<form>
+				<div class="row">
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="email">Email (we use it for cryptographic salt)</label>
+							<input type="email" id="email" class="form-control" v-model="email">
+						</div>
+					</div>
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="masterPassword">Master Password</label>
+							<input type="password" id="masterPassword" class="form-control" v-model="masterPassword">
+						</div>
+					</div>
+					<div class="col-sm-4">
+						<div class="form-group">
+							<label for="pbkdf2Iterations">Client PBKDF2 Iterations</label>
+							<input type="number" id="pbkdf2Iterations" class="form-control" v-model="pbkdf2Iterations">
+						</div>
+					</div>
+				</div>
+			</form>
+
+			<h1>Encryption</h1>
+
+			<form>
+				<div class="form-group">
+					<label for="secret">Password for encryption</label>
+					<textarea id="secret" placeholder="Enter your password here" class="form-control" v-model="secret"></textarea>
+				</div>
+			</form>
+
+			<h2>Encrypted password</h2>
+			<textarea id="copy-enc-pass-btn" class="form-control" v-model="protectedSecretView" readonly></textarea>
+			<button style="margin-top: 14px;" type="button" class="btn btn-primary" onclick="copyEncPass()">Copy encrypted password</button>
+
+			<h1>Decryption</h1>
+
+			<form>
+				<div class="form-group">
+					<label for="protectedSecretAsString">Password for decryption</label>
+					<textarea id="protectedSecretAsString" placeholder="2.Ufy43NucTVlvzRRZ4w0Ngw==|m4tcYV4uhKyANmw+uDnOWYhWlR6r+njZCcHcEQYvIsCumdXEjSV8sCrnhqXIPvC8MMl7Bz/Q9MzQOcrDvwRrrFmly0Uvr8v57weKfffOiXU=|SJnQ/zWwH" class="form-control" v-model="protectedSecretAsString"></textarea>
+				</div>
+			</form>
+
+			<h2>Decrypted password</h2>
+			<textarea id="copy-dec-pass-btn"  class="form-control" v-model="secretAsString" readonly></textarea>
+			<button style="margin-top: 14px;" type="button" class="btn btn-primary" onclick="copyDecPass()">Copy decrypted password</button>
+		</div>
+
+		<script src="https://ajax.googleapis.com/ajax/libs/jquery/2.1.4/jquery.min.js"></script>
+		<script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.7/js/bootstrap.min.js"></script>
+		<script src="https://unpkg.com/vue@2.6.14/dist/vue.js"></script>
+
+		<script>
+			function copyEncPass() {
+				copyToClipboard("copy-enc-pass-btn")
+			}
+
+			function copyDecPass() {
+				copyToClipboard("copy-dec-pass-btn")
+			}
+
+			// https://www.w3schools.com/howto/howto_js_copy_clipboard.asp
+			function copyToClipboard(id) {
+				/* Get the text field */
+				let copyText = document.getElementById(id);
+
+				/* Select the text field */
+				copyText.select();
+				copyText.setSelectionRange(0, 99999); /* For mobile devices */
+
+				/* Copy the text inside the text field */
+				navigator.clipboard.writeText(copyText.value);
+			}
+
+			(function () {
+				// Constants/Enums
+
+				const encTypes = {
+					AesCbc256_B64: 0,
+					AesCbc128_HmacSha256_B64: 1,
+					AesCbc256_HmacSha256_B64: 2,
+					Rsa2048_OaepSha256_B64: 3,
+					Rsa2048_OaepSha1_B64: 4,
+					Rsa2048_OaepSha256_HmacSha256_B64: 5,
+					Rsa2048_OaepSha1_HmacSha256_B64: 6
+				};
+
+				// Object Classes
+
+				class Cipher {
+					constructor(encType, iv, ct, mac) {
+						if (!arguments.length) {
+							this.encType = null;
+							this.iv = null;
+							this.ct = null;
+							this.mac = null;
+							this.string = null;
+							return;
+						}
+
+						this.encType = encType;
+						this.iv = iv;
+						this.ct = ct;
+						this.string = encType + '.' + iv.b64 + '|' + ct.b64;
+
+						this.mac = null;
+						if (mac) {
+							this.mac = mac;
+							this.string += ('|' + mac.b64);
+						}
+					}
+				}
+
+				class ByteData {
+					constructor(buf) {
+						if (!arguments.length) {
+							this.arr = null;
+							this.b64 = null;
+							return;
+						}
+
+						this.arr = new Uint8Array(buf);
+						this.b64 = toB64(buf);
+					}
+				}
+
+				class SymmetricCryptoKey {
+					constructor(buf) {
+						if (!arguments.length) {
+							this.key = new ByteData();
+							this.encKey = new ByteData();
+							this.macKey = new ByteData();
+							return;
+						}
+
+						this.key = new ByteData(buf);
+
+						// First half
+						const encKey = this.key.arr.slice(0, this.key.arr.length / 2).buffer;
+						this.encKey = new ByteData(encKey);
+
+						// Second half
+						const macKey = this.key.arr.slice(this.key.arr.length / 2).buffer;
+						this.macKey = new ByteData(macKey);
+					}
+				}
+
+				// Helpers
+
+				function fromUtf8(str) {
+					const strUtf8 = unescape(encodeURIComponent(str));
+					const bytes = new Uint8Array(strUtf8.length);
+					for (let i = 0; i < strUtf8.length; i++) {
+						bytes[i] = strUtf8.charCodeAt(i);
+					}
+					return bytes.buffer;
+				}
+
+				function toUtf8(buf) {
+					const bytes = new Uint8Array(buf);
+					const encodedString = String.fromCharCode.apply(null, bytes);
+					return decodeURIComponent(escape(encodedString));
+				}
+
+				function toB64(buf) {
+					let binary = '';
+					const bytes = new Uint8Array(buf);
+					for (let i = 0; i < bytes.byteLength; i++) {
+						binary += String.fromCharCode(bytes[i]);
+					}
+					return window.btoa(binary);
+				}
+
+				function fromB64(str) {
+					const binaryString = window.atob(str);
+					const bytes = new Uint8Array(binaryString.length);
+					for (let i = 0; i < binaryString.length; i++) {
+						bytes[i] = binaryString.charCodeAt(i);
+					}
+					return bytes;
+				}
+
+				function parseCipher(cipherAsString) {
+					const parts = cipherAsString.split(".", 2)
+					const encType = parseInt(parts[0], 10);
+
+					const keys = parts[1].split('|')
+					if (keys.length === 2) {
+						const ivData = new ByteData(fromB64(keys[0]))
+						const ctData = new ByteData(fromB64(keys[1]))
+						return new Cipher(encType, ivData, ctData, null);
+					} else if (keys.length === 3) {
+						const ivData = new ByteData(fromB64(keys[0]))
+						const ctData = new ByteData(fromB64(keys[1]))
+						const macData = new ByteData(fromB64(keys[2]))
+						return new Cipher(encType, ivData, ctData, macData);
+					} else {
+						return null
+					}
+				}
+
+				function hasValue(str) {
+					return str && str !== '';
+				}
+
+				// Crypto
+
+				async function pbkdf2(password, salt, iterations, length) {
+					const importAlg = {
+						name: 'PBKDF2'
+					};
+
+					const deriveAlg = {
+						name: 'PBKDF2',
+						salt: salt,
+						iterations: iterations,
+						hash: { name: 'SHA-256' }
+					};
+
+					const aesOptions = {
+						name: 'AES-CBC',
+						length: length
+					};
+
+					try {
+						const importedKey = await window.crypto.subtle.importKey(
+							'raw', password, importAlg, false, ['deriveKey']);
+						const derivedKey = await window.crypto.subtle.deriveKey(
+							deriveAlg, importedKey, aesOptions, true, ['encrypt']);
+						const exportedKey = await window.crypto.subtle.exportKey('raw', derivedKey);
+						return new ByteData(exportedKey);
+					} catch (err) {
+						console.log(err);
+					}
+				}
+
+				async function aesEncrypt(data, encKey, macKey) {
+					const keyOptions = {
+						name: 'AES-CBC'
+					};
+
+					const encOptions = {
+						name: 'AES-CBC',
+						iv: new Uint8Array(16)
+					};
+					window.crypto.getRandomValues(encOptions.iv);
+					const ivData = new ByteData(encOptions.iv.buffer);
+
+					try {
+						const importedKey = await window.crypto.subtle.importKey(
+							'raw', encKey.arr.buffer, keyOptions, false, ['encrypt']);
+						const encryptedBuffer = await window.crypto.subtle.encrypt(encOptions, importedKey, data);
+						const ctData = new ByteData(encryptedBuffer);
+						let type = encTypes.AesCbc256_B64;
+						let macData;
+						if (macKey) {
+							const dataForMac = buildDataForMac(ivData.arr, ctData.arr);
+							const macBuffer = await computeMac(dataForMac.buffer, macKey.arr.buffer);
+							type = encTypes.AesCbc256_HmacSha256_B64;
+							macData = new ByteData(macBuffer);
+						}
+						return new Cipher(type, ivData, ctData, macData);
+					} catch (err) {
+						console.error(err);
+					}
+				}
+
+				async function aesDecrypt(cipher, encKey, macKey) {
+					const keyOptions = {
+						name: 'AES-CBC'
+					};
+
+					const decOptions = {
+						name: 'AES-CBC',
+						iv: cipher.iv.arr.buffer
+					};
+
+					try {
+						const checkMac = cipher.encType != encTypes.AesCbc256_B64;
+						if (checkMac) {
+							if (!macKey) {
+								throw 'MAC key not provided.';
+							}
+							const dataForMac = buildDataForMac(cipher.iv.arr, cipher.ct.arr);
+							const macBuffer = await computeMac(dataForMac.buffer, macKey.arr.buffer);
+							const macsMatch = await macsEqual(cipher.mac.arr.buffer, macBuffer, macKey.arr.buffer);
+							if (!macsMatch) {
+								throw 'MAC check failed.';
+							}
+							const importedKey = await window.crypto.subtle.importKey(
+								'raw', encKey.arr.buffer, keyOptions, false, ['decrypt']);
+							return window.crypto.subtle.decrypt(decOptions, importedKey, cipher.ct.arr.buffer);
+						}
+					} catch (err) {
+						console.error(err);
+					}
+				}
+
+				async function computeMac(data, key) {
+					const alg = {
+						name: 'HMAC',
+						hash: { name: 'SHA-256' }
+					};
+					const importedKey = await window.crypto.subtle.importKey('raw', key, alg, false, ['sign']);
+					return window.crypto.subtle.sign(alg, importedKey, data);
+				}
+
+				async function macsEqual(mac1Data, mac2Data, key) {
+					const alg = {
+						name: 'HMAC',
+						hash: { name: 'SHA-256' }
+					};
+
+					const importedMacKey = await window.crypto.subtle.importKey('raw', key, alg, false, ['sign']);
+					const mac1 = await window.crypto.subtle.sign(alg, importedMacKey, mac1Data);
+					const mac2 = await window.crypto.subtle.sign(alg, importedMacKey, mac2Data);
+
+					if (mac1.byteLength !== mac2.byteLength) {
+						return false;
+					}
+
+					const arr1 = new Uint8Array(mac1);
+					const arr2 = new Uint8Array(mac2);
+
+					for (let i = 0; i < arr2.length; i++) {
+						if (arr1[i] !== arr2[i]) {
+							return false;
+						}
+					}
+
+					return true;
+				}
+
+				function buildDataForMac(ivArr, ctArr) {
+					const dataForMac = new Uint8Array(ivArr.length + ctArr.length);
+					dataForMac.set(ivArr, 0);
+					dataForMac.set(ctArr, ivArr.length);
+					return dataForMac;
+				}
+
+				async function stretchKey(key) {
+					const newKey = new Uint8Array(64);
+					newKey.set(await hkdfExpand(key, new Uint8Array(fromUtf8('enc')), 32));
+					newKey.set(await hkdfExpand(key, new Uint8Array(fromUtf8('mac')), 32), 32);
+					return new SymmetricCryptoKey(newKey.buffer);
+				}
+
+				// ref: https://tools.ietf.org/html/rfc5869
+				async function hkdfExpand(prk, info, size) {
+					const alg = {
+						name: 'HMAC',
+						hash: { name: 'SHA-256' }
+					};
+					const importedKey = await window.crypto.subtle.importKey('raw', prk, alg, false, ['sign']);
+					const hashLen = 32; // sha256
+					const okm = new Uint8Array(size);
+					let previousT = new Uint8Array(0);
+					const n = Math.ceil(size / hashLen);
+					for (let i = 0; i < n; i++) {
+						const t = new Uint8Array(previousT.length + info.length + 1);
+						t.set(previousT);
+						t.set(info, previousT.length);
+						t.set([i + 1], t.length - 1);
+						previousT = new Uint8Array(await window.crypto.subtle.sign(alg, importedKey, t.buffer));
+						okm.set(previousT, i * hashLen);
+					}
+					return okm;
+				}
+
+				// App
+
+				const vm = new Vue({
+					el: '#app',
+					data: {
+						email: '',
+						masterPassword: null,
+						pbkdf2Iterations: 100000,
+
+						masterKey: new ByteData(),
+						masterKeyHash: new ByteData(),
+						stretchedMasterKey: new SymmetricCryptoKey(),
+
+						symKey: new SymmetricCryptoKey(),
+						protectedSymKey: new Cipher(),
+						unprotectedSymKey: new ByteData(),
+
+						secret: '',
+						protectedSecret: new Cipher(),
+						protectedSecretView: '',
+						unprotectedSecret: '',
+
+						protectedSecretAsString: '',
+						secretAsString: ''
+					},
+					computed: {
+						masterPasswordBuffer() {
+							return this.masterPassword ? fromUtf8(this.masterPassword) : null;
+						},
+						emailBuffer() {
+							return this.email ? fromUtf8(this.email) : null;
+						},
+						secretBuffer() {
+							return this.secret ? fromUtf8(this.secret) : null;
+						}
+					},
+					watch: {
+						async masterKey(newValue) {
+							const self = this;
+
+							if (!newValue || !newValue.arr || !self.masterPasswordBuffer) {
+								return new ByteData();
+							}
+
+							self.stretchedMasterKey = await stretchKey(newValue.arr.buffer);
+							self.masterKeyHash = await pbkdf2(newValue.arr.buffer, self.masterPasswordBuffer, 1, 256);
+						}
+					},
+					methods: {
+						async generateKeys() {
+							const self = this;
+
+							const symKey = new Uint8Array(512 / 8);
+							window.crypto.getRandomValues(symKey);
+							self.symKey = new SymmetricCryptoKey(symKey);
+						}
+					}
+				});
+
+				vm.$watch(() => {
+					return {
+						masterPassword: vm.masterPasswordBuffer,
+						email: vm.emailBuffer,
+						iterations: vm.pbkdf2Iterations
+					};
+				}, async (newVal, oldVal) => {
+					if (!newVal.masterPassword || !newVal.email || !newVal.iterations || newVal.iterations < 1) {
+						vm.masterKey = new ByteData();
+						return;
+					}
+
+					vm.masterKey = await pbkdf2(newVal.masterPassword, newVal.email, newVal.iterations, 256);
+				});
+
+				vm.$watch(() => {
+					return {
+						symKey: vm.symKey,
+						secret: vm.secretBuffer,
+						stretchedMasterKey: vm.stretchedMasterKey
+					};
+				}, async (newVal, oldVal) => {
+					if (!newVal.symKey || !newVal.secret) {
+						vm.protectedSecret = new Cipher();
+						vm.protectedSecretView = '';
+						vm.unprotectedSecret = '';
+						return;
+					}
+
+					if (!newVal.stretchedMasterKey.key.arr) {
+						alert("Enter master password!")
+						return
+					}
+
+					vm.protectedSecret = await aesEncrypt(newVal.secret, newVal.symKey.encKey, newVal.symKey.macKey);
+					const secret = await aesDecrypt(vm.protectedSecret, newVal.symKey.encKey, newVal.symKey.macKey);
+					vm.protectedSecretView = vm.protectedSymKey.string + ';' + vm.protectedSecret.string
+					vm.unprotectedSecret = toUtf8(secret);
+				});
+
+				vm.$watch(() => {
+					return {
+						protectedSecretAsString: vm.protectedSecretAsString,
+						stretchedMasterKey: vm.stretchedMasterKey
+					};
+				}, async (newVal, oldVal) => {
+					if (!newVal.protectedSecretAsString) {
+						vm.secretAsString = '';
+						return;
+					}
+
+					if (!newVal.stretchedMasterKey.key.arr) {
+						alert("Enter master password!")
+						return
+					}
+
+					try {
+						const parts = newVal.protectedSecretAsString.split(';', 2)
+						const protectedSymKey = parseCipher(parts[0])
+						const unprotectedSymKey = await aesDecrypt(protectedSymKey, vm.stretchedMasterKey.encKey,
+							vm.stretchedMasterKey.macKey);
+						const symKey = new SymmetricCryptoKey(unprotectedSymKey)
+
+						const cipher = parseCipher(parts[1])
+						const secret = await aesDecrypt(cipher, symKey.encKey, symKey.macKey);
+						vm.secretAsString = toUtf8(secret);
+					} catch (err) {
+						alert("Wrong master password, or entered password for decryption")
+						console.log(err);
+					}
+				});
+
+				vm.$watch(() => {
+					return {
+						stretchedMasterKey: vm.stretchedMasterKey,
+						symKey: vm.symKey
+					};
+				}, async (newVal, oldVal) => {
+					if (!newVal.stretchedMasterKey || !newVal.stretchedMasterKey.key ||
+						!newVal.stretchedMasterKey.key.arr || !newVal.symKey || !newVal.symKey.key ||
+						!newVal.symKey.key.arr) {
+						vm.protectedSymKey = new Cipher();
+						return;
+					}
+
+					vm.protectedSymKey = await aesEncrypt(newVal.symKey.key.arr, newVal.stretchedMasterKey.encKey,
+						newVal.stretchedMasterKey.macKey);
+					const unprotectedSymKey = await aesDecrypt(vm.protectedSymKey, newVal.stretchedMasterKey.encKey,
+						newVal.stretchedMasterKey.macKey);
+					vm.unprotectedSymKey = new ByteData(unprotectedSymKey);
+				});
+
+				// Generate initial set of keys
+				vm.generateKeys();
+
+				// Set default values
+				vm.email = 'user@example.com';
+				vm.masterPassword = null;
+				vm.secret = '';
+			})();
+		</script>
+	</body>
+
+</html>
